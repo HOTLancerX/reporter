@@ -81,10 +81,10 @@ export default function ReporterLayout1({
     const posts     = pageData?.posts     ?? [];
     const activeBox = pageData?.activeBox ?? null;
 
-    // reporter-post permalink prefix (falls back to "reporter-post")
-    const postPrefix = (permalinkMap["reporter-post"] ?? "reporter-post")
+    // blog permalink prefix (falls back to "blog")
+    const postPrefix = (permalinkMap["blog"] ?? "blog")
         .trim()
-        .replace(/^\/+|\/+$/g, "") || "reporter-post";
+        .replace(/^\/+|\/+$/g, "") || "blog";
 
     const displayName = reporter?.name ?? data.title;
 

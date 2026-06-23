@@ -4,10 +4,16 @@
  * Admin — Reporter List  (/admin/reporter)
  *
  * Lists all users with type="reporter".
- * Admin can:
- *   1. Approve / suspend a reporter (reporter_approved toggle)
- *   2. Set that reporter's default post status: "draft" | "published"
- *      (stored in UserInfo as reporter_post_status)
+ *
+ * Access model:
+ *   Any user with type="reporter" and status="active" can post immediately.
+ *   To grant reporter access the admin simply sets user.type to "reporter"
+ *   via the standard Users admin page — no separate approval step needed.
+ *
+ * Admin can set each reporter's default post status:
+ *   "draft"     → posts go to draft and require admin review before going live
+ *   "published" → posts go live immediately without review
+ *   Stored in UserInfo as reporter_post_status.
  */
 
 import { useEffect, useState, useCallback } from "react";
@@ -23,8 +29,6 @@ interface Reporter {
     slug: string;
     status: "active" | "inactive" | "suspended";
     createdAt: string;
-    // from UserInfo
-    reporter_approved?: string; // "1" | "0" | ""
     reporter_post_status?: string; // "draft" | "published"
 }
 
@@ -36,18 +40,20 @@ const STATUS_BADGE: Record<string, { label: string; cls: string }> = {
 
 export default function ReporterList() {
     const [reporters, setReporters] = useState<Reporter[]>([]);
-    const [loading, setLoading] = useState(true);
-    const [search, setSearch] = useState("");
-    const [saving, setSaving] = useState<string | null>(null);
+    const [loading,   setLoading]   = useState(true);
+    const [search,    setSearch]    = useState("");
+    const [saving,    setSaving]    = useState<string | null>(null);
+
+    const EXPRESS_API = process.env.NEXT_PUBLIC_EXPRESS_API_URL ?? "http://localhost:5000";
+    const LICENSE_KEY = process.env.NEXT_PUBLIC_LICENSE_KEY ?? "";
+    const headers = { "x-license-key": LICENSE_KEY };
 
     const fetchReporters = useCallback(async () => {
         setLoading(true);
         try {
-            const EXPRESS_API = process.env.NEXT_PUBLIC_EXPRESS_API_URL ?? "http://localhost:5000";
-            const LICENSE_KEY = process.env.NEXT_PUBLIC_LICENSE_KEY ?? "";
             const res = await fetch(`${EXPRESS_API}/user?type=reporter`, {
                 credentials: "include",
-                headers: { "x-license-key": LICENSE_KEY },
+                headers,
                 cache: "no-store",
             });
             const data = res.ok ? await res.json() : {};
@@ -55,22 +61,20 @@ export default function ReporterList() {
                 (u: any) => u.type === "reporter"
             );
 
-            // Fetch UserInfo for each reporter to get approval status + post_status
+            // Fetch reporter_post_status from UserInfo for each reporter
             const enriched = await Promise.all(
                 users.map(async (u) => {
                     try {
                         const ir = await fetch(`${EXPRESS_API}/user-info?userId=${u._id}`, {
                             credentials: "include",
-                            headers: { "x-license-key": LICENSE_KEY },
+                            headers,
                         });
                         if (!ir.ok) return u;
                         const id = await ir.json();
-                        const infoArr: { name: string; value: string }[] = id.info ?? [];
-                        const get = (k: string) =>
-                            infoArr.find((i) => i.name === k)?.value ?? "";
+                        const arr: { name: string; value: string }[] = id.info ?? [];
+                        const get = (k: string) => arr.find((i) => i.name === k)?.value ?? "";
                         return {
                             ...u,
-                            reporter_approved:    get("reporter_approved"),
                             reporter_post_status: get("reporter_post_status") || "draft",
                         };
                     } catch {
@@ -86,24 +90,19 @@ export default function ReporterList() {
 
     useEffect(() => { fetchReporters(); }, [fetchReporters]);
 
-    /** Save a single UserInfo field for a reporter */
-    const saveInfo = async (userId: string, key: string, value: string) => {
-        setSaving(`${userId}-${key}`);
+    /** Save reporter_post_status in UserInfo */
+    const savePostStatus = async (userId: string, value: string) => {
+        setSaving(userId);
         try {
-            const EXPRESS_API = process.env.NEXT_PUBLIC_EXPRESS_API_URL ?? "http://localhost:5000";
-            const LICENSE_KEY = process.env.NEXT_PUBLIC_LICENSE_KEY ?? "";
             await fetch(`${EXPRESS_API}/user-info`, {
                 method: "POST",
                 credentials: "include",
-                headers: {
-                    "x-license-key": LICENSE_KEY,
-                    "Content-Type": "application/json",
-                },
-                body: JSON.stringify({ userId, name: key, value }),
+                headers: { ...headers, "Content-Type": "application/json" },
+                body: JSON.stringify({ userId, name: "reporter_post_status", value }),
             });
             setReporters((prev) =>
                 prev.map((r) =>
-                    r._id === userId ? { ...r, [key]: value } : r
+                    r._id === userId ? { ...r, reporter_post_status: value } : r
                 )
             );
         } catch { /* silent */ }
@@ -160,10 +159,10 @@ export default function ReporterList() {
                     Post default status
                 </p>
                 <p className="text-sky-600 text-xs">
-                    When <span className="font-mono font-semibold">Draft</span> is set, the reporter's submitted posts will
-                    always be saved as drafts and require manual admin publishing.
-                    When set to <span className="font-mono font-semibold">Published</span>, posts go live immediately
-                    without review.
+                    <span className="font-mono font-semibold">Draft</span> — reporter's posts require admin review before going live.{" "}
+                    <span className="font-mono font-semibold">Published</span> — posts go live immediately.
+                    To grant or revoke reporter access, edit the user's role in the{" "}
+                    <Link href="/admin/users" className="underline hover:text-sky-800">Users</Link> admin.
                 </p>
             </div>
 
@@ -183,8 +182,11 @@ export default function ReporterList() {
                     </p>
                     {!search && (
                         <p className="text-sm mt-1 text-gray-400">
-                            Assign the <span className="font-semibold text-sky-600">Reporter</span> role
-                            from the Users admin page.
+                            Assign the{" "}
+                            <span className="font-semibold text-sky-600">Reporter</span> role from the{" "}
+                            <Link href="/admin/users" className="underline hover:text-gray-600">
+                                Users admin
+                            </Link>.
                         </p>
                     )}
                 </div>
@@ -198,8 +200,7 @@ export default function ReporterList() {
                             <tr className="bg-gray-50 border-b border-gray-200">
                                 <th className="text-left px-5 py-3 font-semibold text-gray-600">Reporter</th>
                                 <th className="text-left px-5 py-3 font-semibold text-gray-600">Contact</th>
-                                <th className="text-left px-5 py-3 font-semibold text-gray-600">User Status</th>
-                                <th className="text-left px-5 py-3 font-semibold text-gray-600">Approved</th>
+                                <th className="text-left px-5 py-3 font-semibold text-gray-600">Status</th>
                                 <th className="text-left px-5 py-3 font-semibold text-gray-600">Post Default</th>
                                 <th className="text-left px-5 py-3 font-semibold text-gray-600">Joined</th>
                                 <th className="px-5 py-3" />
@@ -207,12 +208,8 @@ export default function ReporterList() {
                         </thead>
                         <tbody className="divide-y divide-gray-100">
                             {filtered.map((reporter) => {
-                                const badge =
-                                    STATUS_BADGE[reporter.status] ?? STATUS_BADGE.inactive;
-                                const isApproved = reporter.reporter_approved === "1";
+                                const badge      = STATUS_BADGE[reporter.status] ?? STATUS_BADGE.inactive;
                                 const postStatus = reporter.reporter_post_status || "draft";
-                                const approveKey = `${reporter._id}-reporter_approved`;
-                                const postStatusKey = `${reporter._id}-reporter_post_status`;
 
                                 return (
                                     <tr key={reporter._id} className="hover:bg-gray-50 transition">
@@ -233,9 +230,7 @@ export default function ReporterList() {
                                                 )}
                                                 <div>
                                                     <p className="font-semibold text-gray-900">{reporter.name}</p>
-                                                    <p className="text-xs text-gray-400 font-mono">
-                                                        /{reporter.slug}
-                                                    </p>
+                                                    <p className="text-xs text-gray-400 font-mono">/{reporter.slug}</p>
                                                 </div>
                                             </div>
                                         </td>
@@ -248,54 +243,19 @@ export default function ReporterList() {
                                             )}
                                         </td>
 
-                                        {/* User account status */}
+                                        {/* Account status */}
                                         <td className="px-5 py-3">
                                             <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${badge.cls}`}>
                                                 {badge.label}
                                             </span>
                                         </td>
 
-                                        {/* Reporter approved toggle */}
-                                        <td className="px-5 py-3">
-                                            <button
-                                                onClick={() =>
-                                                    saveInfo(
-                                                        reporter._id,
-                                                        "reporter_approved",
-                                                        isApproved ? "0" : "1"
-                                                    )
-                                                }
-                                                disabled={saving === approveKey}
-                                                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition disabled:opacity-50 ${
-                                                    isApproved
-                                                        ? "bg-emerald-100 text-emerald-700 hover:bg-emerald-200"
-                                                        : "bg-red-50 text-red-600 hover:bg-red-100"
-                                                }`}
-                                            >
-                                                {saving === approveKey ? (
-                                                    <Icon icon="svg-spinners:ring-resize" width={13} />
-                                                ) : (
-                                                    <Icon
-                                                        icon={isApproved ? "solar:check-circle-bold" : "solar:close-circle-bold"}
-                                                        width={13}
-                                                    />
-                                                )}
-                                                {isApproved ? "Approved" : "Not Approved"}
-                                            </button>
-                                        </td>
-
-                                        {/* Post default status */}
+                                        {/* Post default status picker */}
                                         <td className="px-5 py-3">
                                             <select
                                                 value={postStatus}
-                                                disabled={saving === postStatusKey}
-                                                onChange={(e) =>
-                                                    saveInfo(
-                                                        reporter._id,
-                                                        "reporter_post_status",
-                                                        e.target.value
-                                                    )
-                                                }
+                                                disabled={saving === reporter._id}
+                                                onChange={(e) => savePostStatus(reporter._id, e.target.value)}
                                                 className="text-xs border border-gray-200 rounded-lg px-2 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-sky-400 disabled:opacity-50"
                                             >
                                                 <option value="draft">Draft (needs review)</option>
